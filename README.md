@@ -1,64 +1,120 @@
-# Brain Tumor MRI Image Classification
+# ===============================
+# 🧠 Brain Tumor MRI Classification
+# Google Colab Training Notebook
+# ===============================
 
-**Project**: Brain Tumor MRI Image Classification  
-**Description**: Train a CNN/Transfer-learning model to classify brain MRI images (e.g., glioma, meningioma, pituitary, no tumor) and deploy a Streamlit app to make predictions.
+# Step 1️⃣ - Install dependencies
+!pip install tensorflow pandas numpy matplotlib scikit-learn pillow tqdm
 
-## Repo contents
-- `train.py` - training script (TensorFlow / Keras) that expects a folder dataset structured as `data/train/<class>/*` and `data/val/<class>/*`
-- `app.py` - Streamlit web app for uploading an MRI image and getting a predicted class and confidence
-- `utils.py` - helper functions for preprocessing and loading the model
-- `requirements.txt` - Python dependencies
-- `model_stub.md` - guidance for saving/loading your trained .h5 file
-- `README.md` - this file
+# Step 2️⃣ - Import libraries
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+import os
+import numpy as np
+import matplotlib.pyplot as plt
 
-## Quick start (local)
+print("✅ TensorFlow version:", tf.__version__)
 
-1. Create a Python virtual environment and install dependencies:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # or `venv\Scripts\activate` on Windows
-   pip install -r requirements.txt
-   ```
+# Step 3️⃣ - Mount Google Drive (optional: to load/save datasets/models)
+from google.colab import drive
+drive.mount('/content/drive')
 
-2. Prepare dataset folder:
-   ```
-   data/
-     train/
-       glioma/
-       meningioma/
-       pituitary/
-       no_tumor/
-     val/
-       glioma/
-       meningioma/
-       pituitary/
-       no_tumor/
-   ```
-   (Use Kaggle Brain Tumor MRI dataset or your preferred dataset.)
+# Change directory (optional) — store everything inside Drive
+project_dir = "/content/drive/MyDrive/brain_tumor_mri_classification"
+os.makedirs(project_dir, exist_ok=True)
+os.chdir(project_dir)
+print("📂 Project directory:", os.getcwd())
 
-3. Train:
-   ```bash
-   python train.py --epochs 10 --batch_size 32 --img_size 224
-   ```
-   This will save `best_model.h5` in the `models/` folder.
+# Step 4️⃣ - Dataset setup
+# Structure expected:
+# data/train/glioma/, meningioma/, pituitary/, no_tumor/
+# data/val/glioma/, meningioma/, pituitary/, no_tumor/
+# You can upload or unzip your dataset here.
+# Example: use Kaggle dataset (optional if you already have it uploaded)
 
-4. Run Streamlit app:
-   ```bash
-   streamlit run app.py
-   ```
+# Example command to unzip a dataset (if uploaded to Drive)
+# !unzip "/content/drive/MyDrive/dataset.zip" -d "./data"
 
-## How to push to GitHub
+# Step 5️⃣ - Data loading
+data_dir = "data"
+train_dir = os.path.join(data_dir, "train")
+val_dir = os.path.join(data_dir, "val")
+img_size = (224, 224)
+batch_size = 32
 
-```bash
-git init
-git add .
-git commit -m "Initial commit: brain tumor MRI classification"
-gh repo create YOUR_GITHUB_USERNAME/brain-tumor-mri-classification --public --source=. --remote=origin
-git push -u origin main
-```
+train_ds = tf.keras.preprocessing.image_dataset_from_directory(
+    train_dir, image_size=img_size, batch_size=batch_size, label_mode='int'
+)
+val_ds = tf.keras.preprocessing.image_dataset_from_directory(
+    val_dir, image_size=img_size, batch_size=batch_size, label_mode='int'
+)
 
-Replace `YOUR_GITHUB_USERNAME` with your GitHub username. If you don't have GitHub CLI, create an empty repo on GitHub and follow the `git remote add` and push steps.
+class_names = train_ds.class_names
+print("🧩 Classes found:", class_names)
 
-## Notes
-- The training script uses TensorFlow/Keras. For large datasets, use GPU-enabled environment (Colab or local GPU).
-- The Streamlit app expects `models/best_model.h5` to exist. See `model_stub.md` for details.
+# Step 6️⃣ - Prefetch for performance
+AUTOTUNE = tf.data.AUTOTUNE
+train_ds = train_ds.prefetch(AUTOTUNE)
+val_ds = val_ds.prefetch(AUTOTUNE)
+
+# Step 7️⃣ - Model building (Transfer Learning using EfficientNetB0)
+def build_transfer_model(num_classes, input_shape=(224,224,3)):
+    base = EfficientNetB0(weights='imagenet', include_top=False, input_shape=input_shape)
+    base.trainable = False
+    x = layers.GlobalAveragePooling2D()(base.output)
+    x = layers.Dropout(0.3)(x)
+    outputs = layers.Dense(num_classes, activation='softmax')(x)
+    model = models.Model(base.input, outputs)
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+num_classes = len(class_names)
+model = build_transfer_model(num_classes)
+model.summary()
+
+# Step 8️⃣ - Training
+os.makedirs("models", exist_ok=True)
+checkpoint = ModelCheckpoint("models/best_model.h5", monitor="val_accuracy", save_best_only=True, mode="max")
+early_stop = EarlyStopping(monitor="val_accuracy", patience=5, restore_best_weights=True)
+
+history = model.fit(train_ds, validation_data=val_ds, epochs=10, callbacks=[checkpoint, early_stop])
+
+# Step 9️⃣ - Fine-tuning (optional)
+model.layers[1].trainable = True
+model.compile(optimizer=tf.keras.optimizers.Adam(1e-5),
+              loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+history_fine = model.fit(train_ds, validation_data=val_ds, epochs=3, callbacks=[checkpoint, early_stop])
+
+# Step 🔟 - Save model
+model.save("models/best_model.h5")
+print("✅ Model saved at models/best_model.h5")
+
+# Step 11️⃣ - Plot training performance
+plt.figure(figsize=(10,5))
+plt.plot(history.history['accuracy'], label='train_acc')
+plt.plot(history.history['val_accuracy'], label='val_acc')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.title('Training Accuracy')
+plt.show()
+
+# Step 12️⃣ - Test prediction on one image
+import PIL
+from PIL import Image
+
+def preprocess_image(image_path, target_size=(224,224)):
+    image = Image.open(image_path).convert('RGB')
+    image = image.resize(target_size)
+    arr = np.array(image)/255.0
+    return np.expand_dims(arr, 0)
+
+# Example:
+# test_image_path = "data/val/glioma/image(1).jpg"
+# image = preprocess_image(test_image_path)
+# preds = model.predict(image)[0]
+# idx = int(preds.argmax())
+# conf = float(preds[idx])
+# print(f"🧠 Prediction: {class_names[idx]}  (confidence: {conf:.3f})")
